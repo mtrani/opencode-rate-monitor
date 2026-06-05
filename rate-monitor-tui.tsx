@@ -59,20 +59,17 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
     sessions: [] as Array<{ id: string; count: number }>,
   })
 
-  // Listen to message.updated — each new unique messageID with assistant parts = 1 LLM call
+  // Listen to message.updated — each new unique assistant messageID = 1 LLM call
+  // Event shape: { type: "message.updated", properties: { sessionID, info: Message } }
   const off = props.api.event.on("message.updated", (event: any) => {
-    const msg = event?.message ?? event
-    const id = msg?.id ?? msg?.messageID
+    const info = event?.properties?.info
+    const id = info?.id
     if (!id || seenMessages.has(id)) return
-
-    // Only count assistant messages (LLM responses)
-    const role = msg?.role ?? msg?.info?.role
-    if (role !== "assistant") return
+    if (info?.role !== "assistant") return
 
     seenMessages.add(id)
-    const sessionID = msg?.sessionID ?? msg?.info?.sessionID ?? "unknown"
-    const now = Date.now()
-    callTimestamps.push(now)
+    const sessionID = event?.properties?.sessionID ?? "unknown"
+    callTimestamps.push(Date.now())
     totalCalls++
     sessionCalls.set(sessionID, (sessionCalls.get(sessionID) ?? 0) + 1)
   })
@@ -161,19 +158,23 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
 
 // ─── TUI plugin entry point ───────────────────────────────────────────────────
 
-export const tui: TuiPlugin = async (api, options) => {
+const tui: TuiPlugin = async (api, options) => {
   const maxPerMinute = typeof options?.maxPerMinute === "number" ? options.maxPerMinute : 40
 
   api.slots.register({
-    render(props, context) {
-      if (props.name !== "sidebar_content") return null
-      return (
-        <RateMonitorWidget
-          api={api}
-          theme={context.theme.current}
-          maxPerMinute={maxPerMinute}
-        />
-      )
+    order: 600,
+    slots: {
+      sidebar_content(ctx) {
+        return (
+          <RateMonitorWidget
+            api={api}
+            theme={ctx.theme.current}
+            maxPerMinute={maxPerMinute}
+          />
+        )
+      },
     },
   })
 }
+
+export default { id: "rate-monitor-tui", tui }

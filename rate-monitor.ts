@@ -88,7 +88,7 @@ async function throttle(): Promise<void> {
   })
 }
 
-// ─── Plugin export (default — opencode calls default or iterates functions) ───
+// ─── Plugin export ────────────────────────────────────────────────────────────
 
 const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
   if (typeof options?.maxPerMinute === "number") {
@@ -97,7 +97,7 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
 
   const { client } = ctx
 
-  /** Send a toast to the TUI — tries both SDK APIs, ignores errors. */
+  /** Send a toast to the TUI. */
   function notify(message: string, variant: "info" | "warning" | "error" = "info") {
     try {
       const payload = { type: "tui.toast.show", data: { message, variant, duration: 4000 } }
@@ -111,10 +111,6 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
   let lastQueueDepth = 0
 
   return {
-    /**
-     * Fires before every LLM call.
-     * Throttles if over the cap, then records the request.
-     */
     "chat.params": async (input, _output) => {
       await throttle()
 
@@ -122,9 +118,11 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
         timestamp: Date.now(),
         sessionID: input.sessionID,
         agent: input.agent,
-        model: `${input.provider.info.id}/${input.model.id}`,
+        model: `${input.model.providerID}/${input.model.id}`,
       })
       state.totalRequests++
+
+      const recent = recentCount()
 
       // Notify TUI when queue starts or clears
       if (state.queueDepth > 0 && lastQueueDepth === 0) {
@@ -136,11 +134,10 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
 
       // Periodic stats toast every 10 requests
       if (state.totalRequests % 10 === 0) {
-        const recent = recentCount()
         notify(`📊 Rate monitor: ${recent} req/last min · ${state.totalRequests} total`, "info")
       }
     },
   }
 }
 
-export default RateMonitorPlugin
+export const server = RateMonitorPlugin
