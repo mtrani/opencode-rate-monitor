@@ -85,7 +85,7 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
     const rpm =
       recent < 2
         ? recent
-        : Math.round((recent / ((now - callTimestamps[0]) / 60_000)) * 10) / 10
+        : Math.round(recent / ((now - callTimestamps[0]) / 60_000))
 
     // Top sessions by call count
     const sessions = Array.from(sessionCalls.entries())
