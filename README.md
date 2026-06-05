@@ -107,6 +107,17 @@ Create (or update) `~/.config/opencode/tui.json`:
 
 All changes take effect on the next startup.
 
+> **Windows users** — use PowerShell equivalents throughout:
+> - `~/.config/opencode` → `%USERPROFILE%\.config\opencode`
+> - Use `New-Item -ItemType Directory -Path "$env:USERPROFILE\.config\opencode\plugins" -Force` instead of `mkdir -p`
+> - Use `Copy-Item` instead of `cp`
+>   ```powershell
+>   Copy-Item -Path rate-monitor.ts -Destination "$env:USERPROFILE\.config\opencode\plugins\"
+>   Copy-Item -Path rate-monitor-tui.tsx -Destination "$env:USERPROFILE\.config\opencode\plugins\"
+>   ```
+> - Run `npm install` (or `bun install` if available) to fetch dependencies
+> - JSON config paths like `./plugins/rate-monitor.ts` work as-is on Windows (Node.js normalises forward slashes)
+
 ---
 
 ## Configuration
