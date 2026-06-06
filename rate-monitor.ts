@@ -1,23 +1,15 @@
 /**
  * opencode-rate-monitor — server plugin
  *
- * Tracks every LLM request and enforces a configurable per-minute rate cap.
- * Requests that exceed the cap are queued and released as the window slides.
+ * Tracks every LLM request and enforces configurable per-minute rate caps.
  *
  * Usage in opencode.json:
  *   { "plugin": [["./rate-monitor.ts", { "maxPerMinute": 40 }]] }
- *
- * Or as a local plugin (drop in .opencode/plugins/):
- *   No config needed — defaults to 40 req/min.
- *
- * The companion file rate-monitor-tui.tsx reads `sharedState` from this
- * module (same Bun process = same module cache) and renders a sidebar widget.
  */
 
 import type { Plugin, PluginOptions } from "@opencode-ai/plugin"
 
-// ─── Internal state ───────────────────────────────────────────────────────────
-// Not exported — opencode calls every exported function as a plugin.
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface RequestRecord {
   timestamp: number
@@ -26,95 +18,142 @@ interface RequestRecord {
   model: string
 }
 
-const state = {
-  maxPerMinute: 40,
-  history: [] as RequestRecord[],
-  totalRequests: 0,
-  queueDepth: 0,
+interface Bucket {
+  history: RequestRecord[]
+  pendingQueue: Array<{ resolve: () => void }>
+  queueDepth: number
+  processingQueue: boolean
+  maxPerMinute: number
 }
 
-// ─── Internal rate-limiter ────────────────────────────────────────────────────
+interface PluginConfig {
+  maxPerMinute: number
+  rateLimits: Record<string, number>
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
 
 const ONE_MINUTE_MS = 60_000
-const pendingQueue: Array<{ resolve: () => void }> = []
-let processingQueue = false
 
-/** Prune history older than 1 minute and return count in the last minute. */
-function recentCount(): number {
+const state = {
+  totalRequests: 0,
+  buckets: new Map<string, Bucket>(),
+  activeBucketKey: "global" as string,
+}
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+function parseConfig(options?: PluginOptions): PluginConfig {
+  const maxPerMinute = typeof options?.maxPerMinute === "number" ? options.maxPerMinute : 40
+  const rateLimits: Record<string, number> = { ...options?.rateLimits }
+  if (!("global" in rateLimits)) {
+    rateLimits["global"] = maxPerMinute
+  }
+  return { maxPerMinute, rateLimits }
+}
+
+// ─── Bucket helpers ───────────────────────────────────────────────────────────
+
+function getOrCreateBucket(key: string, maxPerMinute: number): Bucket {
+  let b = state.buckets.get(key)
+  if (!b) {
+    b = { history: [], pendingQueue: [], queueDepth: 0, processingQueue: false, maxPerMinute }
+    state.buckets.set(key, b)
+  }
+  return b
+}
+
+function recentCount(bucket: Bucket): number {
   const cutoff = Date.now() - ONE_MINUTE_MS
   let i = 0
-  while (i < state.history.length && state.history[i].timestamp < cutoff) i++
-  if (i > 0) state.history.splice(0, i)
-  return state.history.length
+  while (i < bucket.history.length && bucket.history[i].timestamp < cutoff) i++
+  if (i > 0) bucket.history.splice(0, i)
+  return bucket.history.length
 }
 
-/** Drain the queue, releasing entries as the window has capacity. */
-function drainQueue(): void {
-  if (pendingQueue.length === 0) {
-    processingQueue = false
-    state.queueDepth = 0
+function drainQueue(bucket: Bucket): void {
+  if (bucket.pendingQueue.length === 0) {
+    bucket.processingQueue = false
+    bucket.queueDepth = 0
     return
   }
 
-  const current = recentCount()
-  if (current < state.maxPerMinute) {
-    const entry = pendingQueue.shift()!
-    state.queueDepth = pendingQueue.length
+  const current = recentCount(bucket)
+  if (current < bucket.maxPerMinute) {
+    const entry = bucket.pendingQueue.shift()!
+    bucket.queueDepth = bucket.pendingQueue.length
     entry.resolve()
-    drainQueue()
+    drainQueue(bucket)
     return
   }
 
-  const oldest = state.history[0]?.timestamp ?? Date.now()
+  const oldest = bucket.history[0]?.timestamp ?? Date.now()
   const waitMs = Math.max(50, oldest + ONE_MINUTE_MS - Date.now())
-  setTimeout(drainQueue, waitMs)
+  setTimeout(() => drainQueue(bucket), waitMs)
 }
 
-/**
- * Block until there is capacity in the rate window.
- * Resolves immediately if under the cap or if the cap is disabled (0).
- */
-async function throttle(): Promise<void> {
-  if (state.maxPerMinute <= 0) return
-  if (recentCount() < state.maxPerMinute) return
+async function throttle(bucket: Bucket): Promise<void> {
+  if (bucket.maxPerMinute <= 0) return
+  if (recentCount(bucket) < bucket.maxPerMinute) return
 
-  state.queueDepth++
+  bucket.queueDepth++
   return new Promise<void>((resolve) => {
-    pendingQueue.push({ resolve })
-    if (!processingQueue) {
-      processingQueue = true
-      drainQueue()
+    bucket.pendingQueue.push({ resolve })
+    if (!bucket.processingQueue) {
+      bucket.processingQueue = true
+      drainQueue(bucket)
     }
   })
+}
+
+function resolveBucketKey(providerID: string, modelID: string, config: PluginConfig): string {
+  const modelKey = `model:${providerID}/${modelID}`
+  if (modelKey in config.rateLimits) return modelKey
+  const providerKey = `provider:${providerID}`
+  if (providerKey in config.rateLimits) return providerKey
+  return "global"
+}
+
+function bucketLabel(key: string): string {
+  if (key === "global") return "Global"
+  if (key.startsWith("provider:")) {
+    const name = key.slice("provider:".length)
+    return name.charAt(0).toUpperCase() + name.slice(1)
+  }
+  if (key.startsWith("model:")) {
+    const parts = key.slice("model:".length).split("/")
+    return parts.length > 1 ? parts[1] : parts[0]
+  }
+  return key
 }
 
 // ─── Plugin export ────────────────────────────────────────────────────────────
 
 const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
-  if (typeof options?.maxPerMinute === "number") {
-    state.maxPerMinute = options.maxPerMinute
-  }
-
+  const config = parseConfig(options)
   const { client } = ctx
 
-  /** Send a toast to the TUI. */
   function notify(message: string, variant: "info" | "warning" | "error" = "info") {
     try {
-      const payload = { type: "tui.toast.show", data: { message, variant, duration: 4000 } }
-      ;(client as any).tui?.publish?.(payload)
-      ;(client as any).tui?.showToast?.({ message, variant, duration: 4000 })
+      ;(client as any).tui?.showToast?.({ body: { message, variant, duration: 4000 } })
     } catch {
-      // ignore — TUI may not be attached
+      // ignore
     }
   }
 
-  let lastQueueDepth = 0
+  const lastQueueDepth = new Map<string, number>()
+  let lastTotalForStats = 0
 
   return {
     "chat.params": async (input, _output) => {
-      await throttle()
+      const bucketKey = resolveBucketKey(input.model.providerID, input.model.id, config)
+      state.activeBucketKey = bucketKey
 
-      state.history.push({
+      const bucketMax = bucketKey in config.rateLimits ? config.rateLimits[bucketKey] : config.maxPerMinute
+      const bucket = getOrCreateBucket(bucketKey, bucketMax)
+      await throttle(bucket)
+
+      bucket.history.push({
         timestamp: Date.now(),
         sessionID: input.sessionID,
         agent: input.agent,
@@ -122,20 +161,29 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
       })
       state.totalRequests++
 
-      const recent = recentCount()
+      const label = bucketLabel(bucketKey)
 
-      // Notify TUI when queue starts or clears
-      if (state.queueDepth > 0 && lastQueueDepth === 0) {
-        notify(`⏳ Rate limit hit — ${state.queueDepth} request(s) queued (max ${state.maxPerMinute}/min)`, "warning")
-      } else if (state.queueDepth === 0 && lastQueueDepth > 0) {
-        notify("✅ Request queue cleared", "info")
+      const prevDepth = lastQueueDepth.get(bucketKey) ?? 0
+      if (bucket.queueDepth > 0 && prevDepth === 0) {
+        notify(`⏳ ${label} rate limit hit — ${bucket.queueDepth} request(s) queued (max ${bucketMax}/min)`, "warning")
+      } else if (bucket.queueDepth === 0 && prevDepth > 0) {
+        notify(`✅ ${label} request queue cleared`, "info")
       }
-      lastQueueDepth = state.queueDepth
+      lastQueueDepth.set(bucketKey, bucket.queueDepth)
 
-      // Periodic stats toast every 10 requests
-      if (state.totalRequests % 10 === 0) {
-        notify(`📊 Rate monitor: ${recent} req/last min · ${state.totalRequests} total`, "info")
+      if (state.totalRequests % 10 === 0 && state.totalRequests !== lastTotalForStats) {
+        lastTotalForStats = state.totalRequests
+        const summary = Array.from(state.buckets.entries())
+          .filter(([_, b]) => b.history.length > 0)
+          .map(([k, b]) => {
+            const cutoff = Date.now() - ONE_MINUTE_MS
+            const recent = b.history.filter(r => r.timestamp >= cutoff).length
+            return `${bucketLabel(k)}: ${recent} req/last min`
+          })
+          .join(", ")
+        notify(`📊 Rate monitor: ${summary} · ${state.totalRequests} total`, "info")
       }
+
     },
   }
 }

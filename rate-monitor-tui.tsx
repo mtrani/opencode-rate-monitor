@@ -5,14 +5,14 @@
  * opencode-rate-monitor — TUI plugin
  *
  * Counts LLM requests by listening to message.updated events (TUI side).
- * The companion rate-monitor.ts (server plugin) handles the rate limiting.
+ * The companion rate-monitor.ts (server plugin) handles rate limiting.
  *
  * Add to ~/.config/opencode/tui.json:
  *   { "plugin": [["./plugins/rate-monitor-tui.tsx", { "maxPerMinute": 40 }]] }
  */
 
 import { createSignal, onCleanup, createMemo, For, Show } from "solid-js"
-import type { TuiPlugin, TuiPluginApi, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi, TuiPluginModule, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
 
   // Listen to message.updated — each new unique assistant messageID = 1 LLM call
   // Event shape: { type: "message.updated", properties: { sessionID, info: Message } }
-  const off = props.api.event.on("message.updated", (event: any) => {
+  const offMsg = props.api.event.on("message.updated", (event: any) => {
     const info = event?.properties?.info
     const id = info?.id
     if (!id || seenMessages.has(id)) return
@@ -85,7 +85,7 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
     const rpm =
       recent < 2
         ? recent
-        : Math.round(recent / ((now - callTimestamps[0]) / 60_000))
+        : Math.round((recent / ((now - callTimestamps[0]) / 60_000)) * 10) / 10
 
     // Top sessions by call count
     const sessions = Array.from(sessionCalls.entries())
@@ -98,7 +98,7 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
 
   onCleanup(() => {
     clearInterval(handle)
-    off()
+    offMsg()
   })
 
   const barColor = createMemo(() => {
@@ -114,7 +114,7 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
   const rpmLabel = createMemo(() => {
     const { rpm } = stats()
     const max = props.maxPerMinute
-    return max > 0 ? `${rpm} / ${max} rpm` : `${rpm} rpm`
+    return max > 0 ? `${Math.round(rpm)} / ${max} rpm` : `${Math.round(rpm)} rpm`
   })
 
   return (
@@ -177,4 +177,9 @@ const tui: TuiPlugin = async (api, options) => {
   })
 }
 
-export default { id: "rate-monitor-tui", tui }
+const plugin: TuiPluginModule & { id: string } = {
+  id: "rate-monitor-tui",
+  tui,
+}
+
+export default plugin
