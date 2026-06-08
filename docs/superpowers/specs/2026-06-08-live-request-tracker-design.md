@@ -68,6 +68,8 @@ chat.params fires
 
 ### New custom event types published via `client.tui.publish`
 
+> **Implementation note:** The existing code uses `(client as any).tui?.publish?.()` as a defensive cast (the typed API shape varies by opencode version). The same pattern must be used for these new events.
+
 | Event type | Payload |
 |---|---|
 | `"rate-monitor.request.queued"` | `{ requestID, sessionID, agent, model, providerID, queuedAt }` |
