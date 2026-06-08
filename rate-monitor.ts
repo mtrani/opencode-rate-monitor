@@ -40,14 +40,16 @@ const ONE_MINUTE_MS = 60_000
 const state = {
   totalRequests: 0,
   buckets: new Map<string, Bucket>(),
-  activeBucketKey: "global" as string,
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 function parseConfig(options?: PluginOptions): PluginConfig {
   const maxPerMinute = typeof options?.maxPerMinute === "number" ? options.maxPerMinute : 40
-  const rateLimits: Record<string, number> = { ...options?.rateLimits }
+  const rateLimits: Record<string, number> =
+    options?.rateLimits !== null && typeof options?.rateLimits === "object"
+      ? { ...(options.rateLimits as Record<string, number>) }
+      : {}
   if (!("global" in rateLimits)) {
     rateLimits["global"] = maxPerMinute
   }
@@ -151,8 +153,8 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
   function notify(message: string, variant: "info" | "warning" | "error" = "info") {
     try {
       ;(client as any).tui?.showToast?.({ body: { message, variant, duration: 4000 } })
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("[rate-monitor] Failed to show toast:", err)
     }
   }
 
@@ -162,7 +164,6 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
   return {
     "chat.params": async (input, _output) => {
       const bucketKey = resolveBucketKey(input.model.providerID, input.model.id, config)
-      state.activeBucketKey = bucketKey
 
       const bucketMax = bucketKey in config.rateLimits ? config.rateLimits[bucketKey] : config.maxPerMinute
       const bucket = getOrCreateBucket(bucketKey, bucketMax)
