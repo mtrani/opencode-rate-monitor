@@ -47,7 +47,9 @@ const state = {
 function parseConfig(options?: PluginOptions): PluginConfig {
   const maxPerMinute = typeof options?.maxPerMinute === "number" ? options.maxPerMinute : 40
   const rateLimits: Record<string, number> =
-    options?.rateLimits !== null && typeof options?.rateLimits === "object"
+    options?.rateLimits !== null &&
+    typeof options?.rateLimits === "object" &&
+    !Array.isArray(options.rateLimits)
       ? { ...(options.rateLimits as Record<string, number>) }
       : {}
   if (!("global" in rateLimits)) {
@@ -154,7 +156,7 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
     try {
       ;(client as any).tui?.showToast?.({ body: { message, variant, duration: 4000 } })
     } catch (err) {
-      console.error("[rate-monitor] Failed to show toast:", err)
+      console.warn("[rate-monitor] Failed to show toast:", err)
     }
   }
 
