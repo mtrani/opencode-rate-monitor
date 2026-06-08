@@ -86,7 +86,9 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
       callLogHead = 0
     }
 
-    // Prune seenMessages older than 2 minutes
+    // Prune seenMessages older than 2 minutes.
+    // Deleting during Map iteration is safe: entries are visited in insertion order
+    // and deletion of an already-visited key has no effect on remaining iteration.
     const seenCutoff = now - 120_000
     for (const [msgId, ts] of seenMessages) {
       if (ts < seenCutoff) seenMessages.delete(msgId)
