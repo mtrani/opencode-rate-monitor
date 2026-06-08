@@ -108,7 +108,7 @@ function drainQueue(bucket: Bucket): void {
 
 async function throttle(bucket: Bucket): Promise<void> {
   if (bucket.maxPerMinute <= 0) return
-  if (pruneAndCount(bucket) < bucket.maxPerMinute) return
+  if (pruneAndCount(bucket) + bucket.pendingAdds < bucket.maxPerMinute) return
 
   bucket.queueDepth++
   return new Promise<void>((resolve) => {
