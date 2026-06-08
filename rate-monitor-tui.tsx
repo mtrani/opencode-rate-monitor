@@ -60,6 +60,12 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
 
   // Listen to message.updated — each new unique assistant messageID = 1 LLM call
   // Event shape: { type: "message.updated", properties: { sessionID, info: Message } }
+  //
+  // NOTE: The TUI count may diverge slightly from the server-side count in rate-monitor.ts.
+  // The server counts in chat.params (before LLM call), while the TUI counts on message.updated
+  // (after the assistant message arrives). Retried, cancelled, or streamed-then-aborted calls
+  // may appear on one side but not the other. This is expected — treat both counters as
+  // independent approximations of activity, not as authoritative totals.
   const offMsg = props.api.event.on("message.updated", (event: any) => {
     const info = event?.properties?.info
     const id = info?.id
@@ -133,7 +139,8 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
   const rpmLabel = createMemo(() => {
     const { rpm } = stats()
     const max = props.maxPerMinute
-    return max > 0 ? `${Math.round(rpm)} / ${max} rpm` : `${Math.round(rpm)} rpm`
+    // Preserve one decimal place to show e.g. "12.5 / 40 rpm" rather than "13 / 40 rpm"
+    return max > 0 ? `${rpm.toFixed(1)} / ${max} rpm` : `${rpm.toFixed(1)} rpm`
   })
 
   return (
