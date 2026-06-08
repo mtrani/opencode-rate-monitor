@@ -100,8 +100,10 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
       if (ts < seenCutoff) seenMessages.delete(msgId)
     }
 
-    const recentCalls = callLog.slice(callLogHead)
-    const recent = recentCalls.length
+    // Iterate from callLogHead directly — avoids allocating a slice on every tick.
+    // After compaction above, callLogHead === 0 and callLog[0] is the window start,
+    // so the rpm formula below is always reading the correct oldest timestamp.
+    const recent = callLog.length - callLogHead
 
     const rpm =
       recent < 2
@@ -110,7 +112,8 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
 
     // Sessions in last 60s only
     const sessionMap = new Map<string, number>()
-    for (const { sessionID } of recentCalls) {
+    for (let i = callLogHead; i < callLog.length; i++) {
+      const { sessionID } = callLog[i]
       sessionMap.set(sessionID, (sessionMap.get(sessionID) ?? 0) + 1)
     }
     const sessions = Array.from(sessionMap.entries())

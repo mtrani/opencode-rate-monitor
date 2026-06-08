@@ -183,30 +183,38 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
 
       const wasQueued = await throttle(bucket)
 
-      bucket.history.push({
-        timestamp: Date.now(),
-        sessionID: input.sessionID,
-        agent: input.agent,
-        model: `${input.model.providerID}/${input.model.id}`,
-      })
-      if (wasQueued && bucket.pendingAdds > 0) bucket.pendingAdds--
-      state.totalRequests++
+      // Guard: decrement pendingAdds in finally so a throw can never leave it
+      // permanently incremented (which would silently block future capacity).
+      try {
+        bucket.history.push({
+          timestamp: Date.now(),
+          sessionID: input.sessionID,
+          agent: input.agent,
+          model: `${input.model.providerID}/${input.model.id}`,
+        })
+        state.totalRequests++
+      } finally {
+        if (wasQueued && bucket.pendingAdds > 0) bucket.pendingAdds--
+      }
 
-      // Check queue-clear AFTER throttle
-      if (bucket.queueDepth === 0 && (prevDepth > 0 || willQueue)) {
+      // Check queue-clear AFTER throttle.
+      // Condition is prevDepth > 0 only: prevDepth was set to 1 in the pre-throttle
+      // block when this or a prior request entered the queue, so clearing on prevDepth > 0
+      // is sufficient. Including ||willQueue would fire a clear-toast in the same tick as
+      // the start-toast when a single request both enters and exits the queue immediately.
+      if (bucket.queueDepth === 0 && prevDepth > 0) {
         notify(`✅ ${label} request queue cleared`, "info")
       }
       lastQueueDepth.set(bucketKey, bucket.queueDepth)
 
       if (state.totalRequests % 10 === 0 && state.totalRequests !== lastTotalForStats) {
         lastTotalForStats = state.totalRequests
+        // pruneAndCount() mutates history in-place and returns the live count —
+        // no temporary array allocation needed.
         const summary = Array.from(state.buckets.entries())
-          .filter(([_, b]) => b.history.length > 0)
-          .map(([k, b]) => {
-            const cutoff = Date.now() - ONE_MINUTE_MS
-            const recent = b.history.filter(r => r.timestamp >= cutoff).length
-            return `${bucketLabel(k)}: ${recent} req/last min`
-          })
+          .map(([k, b]) => ({ k, recent: pruneAndCount(b) }))
+          .filter(({ recent }) => recent > 0)
+          .map(({ k, recent }) => `${bucketLabel(k)}: ${recent} req/last min`)
           .join(", ")
         notify(`📊 Rate monitor: ${summary} · ${state.totalRequests} total`, "info")
       }
