@@ -55,6 +55,57 @@ const FillBar = (props: { theme: TuiThemeCurrent; value: number; max: number; co
   )
 }
 
+const LiveRequestsPanel = (props: {
+  theme: TuiThemeCurrent
+  requests: Map<string, RequestEntry>
+  tick: number  // read in elapsed() to force re-render every second — do not remove
+}) => {
+  const entries = () => Array.from(props.requests.values())
+
+  const stateIcon = (s: RequestEntry["state"]) => {
+    if (s === "queued") return "●"
+    if (s === "active") return "◉"
+    return "✓"
+  }
+
+  const stateColor = (s: RequestEntry["state"], theme: TuiThemeCurrent) => {
+    if (s === "queued") return theme.warning
+    if (s === "active") return theme.accent
+    return theme.textMuted
+  }
+
+  const elapsed = (entry: RequestEntry) => {
+    if (entry.state !== "active" || !entry.activeAt) return ""
+    const secs = Math.floor((Date.now() - entry.activeAt) / 1000)
+    return ` ${secs}s`
+  }
+
+  return (
+    <Show when={entries().length > 0}>
+      <box width="100%" marginTop={1}>
+        <text fg={props.theme.textMuted}>
+          <b>Live Requests</b>
+        </text>
+      </box>
+      <For each={entries()}>
+        {(entry) => (
+          <box width="100%" flexDirection="row" gap={1}>
+            <text fg={stateColor(entry.state, props.theme)}>
+              {stateIcon(entry.state)}
+            </text>
+            <text fg={stateColor(entry.state, props.theme)}>
+              {entry.agent ?? "unknown"}
+            </text>
+            <text fg={props.theme.textMuted}>
+              {entry.providerID}/{entry.model}{elapsed(entry)}
+            </text>
+          </box>
+        )}
+      </For>
+    </Show>
+  )
+}
+
 // ─── Main widget ──────────────────────────────────────────────────────────────
 
 const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; maxPerMinute: number }) => {
