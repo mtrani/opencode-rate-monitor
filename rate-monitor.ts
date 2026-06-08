@@ -31,6 +31,15 @@ interface PluginConfig {
   rateLimits: Record<string, number>
 }
 
+interface RequestEntry {
+  requestID: string
+  sessionID: string
+  agent: string
+  model: string
+  providerID: string
+  queuedAt: number
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 
 const ONE_MINUTE_MS = 60_000
@@ -40,6 +49,9 @@ const state = {
   buckets: new Map<string, Bucket>(),
   activeBucketKey: "global" as string,
 }
+
+// Maps sessionID → FIFO queue of requestIDs awaiting a chat.message completion
+const pendingBySession = new Map<string, string[]>()
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
