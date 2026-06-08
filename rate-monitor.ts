@@ -169,6 +169,17 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
 
       const bucketMax = bucketKey in config.rateLimits ? config.rateLimits[bucketKey] : config.maxPerMinute
       const bucket = getOrCreateBucket(bucketKey, bucketMax)
+      const label = bucketLabel(bucketKey)
+
+      // Check queue state BEFORE throttle — fire queue-start toast synchronously
+      const prevDepth = lastQueueDepth.get(bucketKey) ?? 0
+      const willQueue =
+        bucket.maxPerMinute > 0 &&
+        pruneAndCount(bucket) + bucket.pendingAdds >= bucket.maxPerMinute
+      if (willQueue && prevDepth === 0) {
+        notify(`⏳ ${label} rate limit hit — ${bucket.queueDepth + 1} request(s) queued (max ${bucketMax}/min)`, "warning")
+      }
+
       const wasQueued = await throttle(bucket)
 
       bucket.history.push({
@@ -180,12 +191,10 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
       if (wasQueued && bucket.pendingAdds > 0) bucket.pendingAdds--
       state.totalRequests++
 
-      const label = bucketLabel(bucketKey)
-
-      const prevDepth = lastQueueDepth.get(bucketKey) ?? 0
-      if (bucket.queueDepth > 0 && prevDepth === 0) {
-        notify(`⏳ ${label} rate limit hit — ${bucket.queueDepth} request(s) queued (max ${bucketMax}/min)`, "warning")
-      } else if (bucket.queueDepth === 0 && prevDepth > 0) {
+      // Check queue-clear AFTER throttle
+      if (wasQueued && bucket.queueDepth === 0 && prevDepth === 0) {
+        // queue formed and cleared during this single wait — no persistent queue, no clear toast needed
+      } else if (bucket.queueDepth === 0 && (prevDepth > 0 || willQueue)) {
         notify(`✅ ${label} request queue cleared`, "info")
       }
       lastQueueDepth.set(bucketKey, bucket.queueDepth)
@@ -202,7 +211,6 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
           .join(", ")
         notify(`📊 Rate monitor: ${summary} · ${state.totalRequests} total`, "info")
       }
-
     },
   }
 }
