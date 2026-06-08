@@ -178,6 +178,7 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
         pruneAndCount(bucket) + bucket.pendingAdds >= bucket.maxPerMinute
       if (willQueue && prevDepth === 0) {
         notify(`⏳ ${label} rate limit hit — ${bucket.queueDepth + 1} request(s) queued (max ${bucketMax}/min)`, "warning")
+        lastQueueDepth.set(bucketKey, 1)
       }
 
       const wasQueued = await throttle(bucket)
@@ -192,9 +193,7 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
       state.totalRequests++
 
       // Check queue-clear AFTER throttle
-      if (wasQueued && bucket.queueDepth === 0 && prevDepth === 0) {
-        // queue formed and cleared during this single wait — no persistent queue, no clear toast needed
-      } else if (bucket.queueDepth === 0 && (prevDepth > 0 || willQueue)) {
+      if (bucket.queueDepth === 0 && (prevDepth > 0 || willQueue)) {
         notify(`✅ ${label} request queue cleared`, "info")
       }
       lastQueueDepth.set(bucketKey, bucket.queueDepth)
