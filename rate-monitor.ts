@@ -63,7 +63,8 @@ function getOrCreateBucket(key: string, maxPerMinute: number): Bucket {
   return b
 }
 
-function recentCount(bucket: Bucket): number {
+/** Prunes expired entries from bucket.history and returns the remaining count. */
+function pruneAndCount(bucket: Bucket): number {
   const cutoff = Date.now() - ONE_MINUTE_MS
   let i = 0
   while (i < bucket.history.length && bucket.history[i].timestamp < cutoff) i++
@@ -78,7 +79,7 @@ function drainQueue(bucket: Bucket): void {
     return
   }
 
-  const current = recentCount(bucket)
+  const current = pruneAndCount(bucket)
   if (current < bucket.maxPerMinute) {
     const entry = bucket.pendingQueue.shift()!
     bucket.queueDepth = bucket.pendingQueue.length
@@ -94,7 +95,7 @@ function drainQueue(bucket: Bucket): void {
 
 async function throttle(bucket: Bucket): Promise<void> {
   if (bucket.maxPerMinute <= 0) return
-  if (recentCount(bucket) < bucket.maxPerMinute) return
+  if (pruneAndCount(bucket) < bucket.maxPerMinute) return
 
   bucket.queueDepth++
   return new Promise<void>((resolve) => {
