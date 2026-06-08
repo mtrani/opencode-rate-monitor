@@ -163,7 +163,39 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
 
       const bucketMax = bucketKey in config.rateLimits ? config.rateLimits[bucketKey] : config.maxPerMinute
       const bucket = getOrCreateBucket(bucketKey, bucketMax)
+
+      // ── Live request tracking ────────────────────────────────────────────
+      const requestID = crypto.randomUUID()
+      const entry: RequestEntry = {
+        requestID,
+        sessionID: input.sessionID,
+        agent: input.agent ?? "unknown",
+        model: input.model.id,
+        providerID: input.model.providerID,
+        queuedAt: Date.now(),
+      }
+
+      try {
+        ;(client as any).tui?.publish?.({
+          type: "rate-monitor.request.queued",
+          properties: entry,
+        })
+      } catch { /* ignore */ }
+
       await throttle(bucket)
+
+      try {
+        ;(client as any).tui?.publish?.({
+          type: "rate-monitor.request.active",
+          properties: { requestID, activeAt: Date.now() },
+        })
+      } catch { /* ignore */ }
+
+      // Register for done correlation (FIFO per session)
+      const queue = pendingBySession.get(input.sessionID) ?? []
+      queue.push(requestID)
+      pendingBySession.set(input.sessionID, queue)
+      // ── End live request tracking ────────────────────────────────────────
 
       bucket.history.push({
         timestamp: Date.now(),
