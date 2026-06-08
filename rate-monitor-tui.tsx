@@ -124,6 +124,9 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
     sessions: [] as Array<{ id: string; count: number }>,
   })
 
+  const [liveRequests, setLiveRequests] = createSignal<Map<string, RequestEntry>>(new Map())
+  const [tick, setTick] = createSignal(0)
+
   // Listen to message.updated — each new unique assistant messageID = 1 LLM call
   // Event shape: { type: "message.updated", properties: { sessionID, info: Message } }
   const offMsg = props.api.event.on("message.updated", (event: any) => {
@@ -139,8 +142,62 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
     sessionCalls.set(sessionID, (sessionCalls.get(sessionID) ?? 0) + 1)
   })
 
+  // Live request lifecycle events from the server plugin
+  const offQueued = props.api.event.on("rate-monitor.request.queued", (event: any) => {
+    const p = event?.properties
+    if (!p?.requestID) return
+    setLiveRequests((prev) => {
+      const next = new Map(prev)
+      next.set(p.requestID, {
+        requestID: p.requestID,
+        sessionID: p.sessionID,
+        agent: p.agent ?? "unknown",
+        model: p.model,
+        providerID: p.providerID,
+        state: "queued",
+        queuedAt: p.queuedAt ?? Date.now(),
+      })
+      return next
+    })
+  })
+
+  const offActive = props.api.event.on("rate-monitor.request.active", (event: any) => {
+    const p = event?.properties
+    if (!p?.requestID) return
+    setLiveRequests((prev) => {
+      const next = new Map(prev)
+      const existing = next.get(p.requestID)
+      if (existing) {
+        next.set(p.requestID, { ...existing, state: "active", activeAt: p.activeAt ?? Date.now() })
+      }
+      return next
+    })
+  })
+
+  const offDone = props.api.event.on("rate-monitor.request.done", (event: any) => {
+    const p = event?.properties
+    if (!p?.requestID) return
+    setLiveRequests((prev) => {
+      const next = new Map(prev)
+      const existing = next.get(p.requestID)
+      if (existing) {
+        next.set(p.requestID, { ...existing, state: "done", doneAt: p.doneAt ?? Date.now() })
+      }
+      return next
+    })
+    // Remove done entry after 2.5 seconds
+    setTimeout(() => {
+      setLiveRequests((prev) => {
+        const next = new Map(prev)
+        next.delete(p.requestID)
+        return next
+      })
+    }, 2500)
+  })
+
   // Refresh display every second
   const handle = setInterval(() => {
+    setTick((t) => t + 1)
     const now = Date.now()
     const cutoff = now - 60_000
     // Prune old entries
@@ -164,6 +221,9 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
   onCleanup(() => {
     clearInterval(handle)
     offMsg()
+    offQueued()
+    offActive()
+    offDone()
   })
 
   const barColor = createMemo(() => {
@@ -217,6 +277,12 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
           )}
         </For>
       </Show>
+
+      <LiveRequestsPanel
+        theme={props.theme}
+        requests={liveRequests()}
+        tick={tick()}
+      />
     </box>
   )
 }
