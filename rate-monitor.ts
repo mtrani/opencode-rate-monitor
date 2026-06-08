@@ -106,13 +106,14 @@ function drainQueue(bucket: Bucket): void {
   setTimeout(() => drainQueue(bucket), waitMs)
 }
 
-async function throttle(bucket: Bucket): Promise<void> {
-  if (bucket.maxPerMinute <= 0) return
-  if (pruneAndCount(bucket) + bucket.pendingAdds < bucket.maxPerMinute) return
+/** Returns true if the request was held in the queue before being released. */
+async function throttle(bucket: Bucket): Promise<boolean> {
+  if (bucket.maxPerMinute <= 0) return false
+  if (pruneAndCount(bucket) + bucket.pendingAdds < bucket.maxPerMinute) return false
 
   bucket.queueDepth++
-  return new Promise<void>((resolve) => {
-    bucket.pendingQueue.push({ resolve })
+  return new Promise<boolean>((resolve) => {
+    bucket.pendingQueue.push({ resolve: () => resolve(true) })
     if (!bucket.processingQueue) {
       bucket.processingQueue = true
       drainQueue(bucket)
@@ -165,7 +166,7 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
 
       const bucketMax = bucketKey in config.rateLimits ? config.rateLimits[bucketKey] : config.maxPerMinute
       const bucket = getOrCreateBucket(bucketKey, bucketMax)
-      await throttle(bucket)
+      const wasQueued = await throttle(bucket)
 
       bucket.history.push({
         timestamp: Date.now(),
@@ -173,7 +174,7 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
         agent: input.agent,
         model: `${input.model.providerID}/${input.model.id}`,
       })
-      if (bucket.pendingAdds > 0) bucket.pendingAdds--
+      if (wasQueued && bucket.pendingAdds > 0) bucket.pendingAdds--
       state.totalRequests++
 
       const label = bucketLabel(bucketKey)
