@@ -22,6 +22,8 @@ interface Bucket {
   history: RequestRecord[]
   pendingQueue: Array<{ resolve: () => void }>
   queueDepth: number
+  /** Released from queue but not yet committed to history. Counts toward capacity. */
+  pendingAdds: number
   processingQueue: boolean
   maxPerMinute: number
 }
@@ -57,7 +59,7 @@ function parseConfig(options?: PluginOptions): PluginConfig {
 function getOrCreateBucket(key: string, maxPerMinute: number): Bucket {
   let b = state.buckets.get(key)
   if (!b) {
-    b = { history: [], pendingQueue: [], queueDepth: 0, processingQueue: false, maxPerMinute }
+    b = { history: [], pendingQueue: [], queueDepth: 0, pendingAdds: 0, processingQueue: false, maxPerMinute }
     state.buckets.set(key, b)
   }
   return b
@@ -73,21 +75,32 @@ function pruneAndCount(bucket: Bucket): number {
 }
 
 function drainQueue(bucket: Bucket): void {
+  // Invariant: processingQueue is true while this function is scheduled or
+  // running. It prevents concurrent drain loops from starting on the same bucket.
+  // It is set to false only when the queue empties and we exit without scheduling
+  // a new setTimeout.
+
+  // Release as many queued entries as capacity allows.
+  // pendingAdds tracks entries that have been released but not yet committed
+  // to bucket.history, so they still count against the cap.
+  while (bucket.pendingQueue.length > 0) {
+    const current = pruneAndCount(bucket)
+    const effectiveCount = current + bucket.pendingAdds
+    if (effectiveCount >= bucket.maxPerMinute) break
+
+    const entry = bucket.pendingQueue.shift()!
+    bucket.queueDepth = bucket.pendingQueue.length
+    bucket.pendingAdds++
+    entry.resolve()
+  }
+
   if (bucket.pendingQueue.length === 0) {
     bucket.processingQueue = false
     bucket.queueDepth = 0
     return
   }
 
-  const current = pruneAndCount(bucket)
-  if (current < bucket.maxPerMinute) {
-    const entry = bucket.pendingQueue.shift()!
-    bucket.queueDepth = bucket.pendingQueue.length
-    entry.resolve()
-    drainQueue(bucket)
-    return
-  }
-
+  // Still items in queue — schedule retry when oldest entry ages out.
   const oldest = bucket.history[0]?.timestamp ?? Date.now()
   const waitMs = Math.max(50, oldest + ONE_MINUTE_MS - Date.now())
   setTimeout(() => drainQueue(bucket), waitMs)
@@ -160,6 +173,7 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
         agent: input.agent,
         model: `${input.model.providerID}/${input.model.id}`,
       })
+      if (bucket.pendingAdds > 0) bucket.pendingAdds--
       state.totalRequests++
 
       const label = bucketLabel(bucketKey)
