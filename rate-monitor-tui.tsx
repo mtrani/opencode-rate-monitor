@@ -14,6 +14,20 @@
 import { createSignal, onCleanup, createMemo, For, Show } from "solid-js"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface RequestEntry {
+  requestID: string
+  sessionID: string
+  agent: string
+  model: string
+  providerID: string
+  state: "queued" | "active" | "done"
+  queuedAt: number
+  activeAt?: number
+  doneAt?: number
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 const StatRow = (props: { theme: TuiThemeCurrent; label: string; value: string; color?: string }) => (
