@@ -43,14 +43,13 @@ const FillBar = (props: { theme: TuiThemeCurrent; value: number; max: number; co
 
 // ─── Main widget ──────────────────────────────────────────────────────────────
 
-const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; maxPerMinute: number }) => {
-  // Each entry is the timestamp of an observed LLM call
-  const callTimestamps: number[] = []
-  const sessionCalls = new Map<string, number>()
-  let totalCalls = 0
+interface CallEntry { timestamp: number; sessionID: string }
 
-  // Track seen messageIDs so streaming updates don't double-count
-  const seenMessages = new Set<string>()
+const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; maxPerMinute: number }) => {
+  const callLog: CallEntry[] = []          // sliding 60-second window data
+  let callLogHead = 0                       // O(1) prune pointer
+  const seenMessages = new Map<string, number>()  // messageID → timestamp (for pruning)
+  let totalCalls = 0
 
   const [stats, setStats] = createSignal({
     recentCount: 0,
@@ -67,28 +66,46 @@ const RateMonitorWidget = (props: { api: TuiPluginApi; theme: TuiThemeCurrent; m
     if (!id || seenMessages.has(id)) return
     if (info?.role !== "assistant") return
 
-    seenMessages.add(id)
+    const now = Date.now()
+    seenMessages.set(id, now)
     const sessionID = event?.properties?.sessionID ?? "unknown"
-    callTimestamps.push(Date.now())
+    callLog.push({ timestamp: now, sessionID })
     totalCalls++
-    sessionCalls.set(sessionID, (sessionCalls.get(sessionID) ?? 0) + 1)
   })
 
   // Refresh display every second
   const handle = setInterval(() => {
     const now = Date.now()
     const cutoff = now - 60_000
-    // Prune old entries
-    while (callTimestamps.length > 0 && callTimestamps[0] < cutoff) callTimestamps.shift()
 
-    const recent = callTimestamps.length
+    // O(1) prune: advance head pointer
+    while (callLogHead < callLog.length && callLog[callLogHead].timestamp < cutoff) callLogHead++
+    // Compact when head is past halfway (amortised O(1))
+    if (callLogHead > callLog.length / 2) {
+      callLog.splice(0, callLogHead)
+      callLogHead = 0
+    }
+
+    // Prune seenMessages older than 2 minutes
+    const seenCutoff = now - 120_000
+    for (const [msgId, ts] of seenMessages) {
+      if (ts < seenCutoff) seenMessages.delete(msgId)
+    }
+
+    const recentCalls = callLog.slice(callLogHead)
+    const recent = recentCalls.length
+
     const rpm =
       recent < 2
         ? recent
-        : Math.round((recent / ((now - callTimestamps[0]) / 60_000)) * 10) / 10
+        : Math.round((recent / Math.max(1, (now - callLog[callLogHead].timestamp) / 60_000)) * 10) / 10
 
-    // Top sessions by call count
-    const sessions = Array.from(sessionCalls.entries())
+    // Sessions in last 60s only
+    const sessionMap = new Map<string, number>()
+    for (const { sessionID } of recentCalls) {
+      sessionMap.set(sessionID, (sessionMap.get(sessionID) ?? 0) + 1)
+    }
+    const sessions = Array.from(sessionMap.entries())
       .map(([id, count]) => ({ id, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5)
