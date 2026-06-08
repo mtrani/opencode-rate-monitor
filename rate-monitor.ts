@@ -229,6 +229,21 @@ const RateMonitorPlugin: Plugin = async (ctx, options?: PluginOptions) => {
       }
 
     },
+
+    "chat.message": async (input) => {
+      const queue = pendingBySession.get(input.sessionID)
+      if (!queue || queue.length === 0) return
+
+      const requestID = queue.shift()!
+      if (queue.length === 0) pendingBySession.delete(input.sessionID)
+
+      try {
+        ;(client as any).tui?.publish?.({
+          type: "rate-monitor.request.done",
+          properties: { requestID, doneAt: Date.now() },
+        })
+      } catch { /* ignore */ }
+    },
   }
 }
 
